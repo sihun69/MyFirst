@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>호흡 명상 프로그램</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .container {
+            text-align: center;
+        }
+        #breathCircle {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background-color: #3498db;
+            margin: 20px auto;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            transition: transform 4s ease-in-out;
+        }
+        #remainingTime {
+            font-size: 18px;
+            margin-bottom: 20px;
+        }
+        button {
+            font-size: 16px;
+            padding: 10px 20px;
+            margin: 0 10px;
+        }
+        #settingsPanel {
+            margin-top: 20px;
+            text-align: left;
+        }
+        #settingsPanel label {
+            display: block;
+            margin-bottom: 10px;
+        }
+        input[type="range"] {
+            width: 200px;
+            margin: 0 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>호흡 명상 프로그램</h1>
+        <div id="breathCircle">ready</div>
+        <div id="remainingTime"></div>
+        <button id="startBtn">시작</button>
+        <button id="pauseBtn" style="display: none;">잠시 멈춤</button>
+        <div id="settingsPanel">
+            <h2>설정</h2>
+            <label>
+                배경음악 볼륨:
+                <input type="range" id="backgroundMusicVolume" min="1" max="10" value="5">
+                <span id="backgroundMusicVolumeValue">5</span>
+            </label>
+            <label>
+                싱잉볼 볼륨:
+                <input type="range" id="singingBowlVolume" min="1" max="10" value="5">
+                <span id="singingBowlVolumeValue">5</span>
+            </label>
+        </div>
+    </div>
+
+    <script>
+        let audioContext;
+        let backgroundMusicBuffer;
+        let singingBowlBuffer;
+        let backgroundMusicSource;
+        let singingBowlSource;
+        let backgroundMusicGainNode;
+        let singingBowlGainNode;
+        let isBreathing = false;
+        let isPaused = false;
+        let currentPhase = 'inhale';
+        let remainingTime = 0;
+        let breathingTimer;
+        let sessionEndTime;
+        let updateTimeTimer;
+
+        const startBtn = document.getElementById('startBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const breathCircle = document.getElementById('breathCircle');
+        const remainingTimeDisplay = document.getElementById('remainingTime');
+        const backgroundMusicVolumeSlider = document.getElementById('backgroundMusicVolume');
+        const singingBowlVolumeSlider = document.getElementById('singingBowlVolume');
+        const backgroundMusicVolumeValue = document.getElementById('backgroundMusicVolumeValue');
+        const singingBowlVolumeValue = document.getElementById('singingBowlVolumeValue');
+
+        const settings = {
+            totalTime: 10, // 전체 시간 (분)
+            inhaleTime: 4, // 들이쉬는 시간 (초)
+            inhaleHoldTime: 4, // 들숨 멈추는 시간 (초)
+            exhaleTime: 4, // 내쉬는 시간 (초)
+            exhaleHoldTime: 4, // 날숨 멈추는 시간 (초)
+            singingBowl: true, // 싱잉볼 소리 사용 여부
+            backgroundMusicVolume: 5,
+            singingBowlVolume: 5
+        };
+
+        async function initAudio() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            backgroundMusicGainNode = audioContext.createGain();
+            singingBowlGainNode = audioContext.createGain();
+
+            try {
+                const rainResponse = await fetch('audio/rain.mp3');
+                const rainArrayBuffer = await rainResponse.arrayBuffer();
+                backgroundMusicBuffer = await audioContext.decodeAudioData(rainArrayBuffer);
+
+                const bowlResponse = await fetch('audio/singing-bowl.mp3');
+                const bowlArrayBuffer = await bowlResponse.arrayBuffer();
+                singingBowlBuffer = await audioContext.decodeAudioData(bowlArrayBuffer);
+
+                console.log('Audio files loaded successfully');
+            } catch (error) {
+                console.error('오디오 파일을 로드하는 중 오류가 발생했습니다:', error);
+            }
+        }
+
+        function playBackgroundMusic() {
+            if (audioContext && backgroundMusicBuffer) {
+                backgroundMusicSource = audioContext.createBufferSource();
+                backgroundMusicSource.buffer = backgroundMusicBuffer;
+                backgroundMusicSource.connect(backgroundMusicGainNode);
+                backgroundMusicGainNode.connect(audioContext.destination);
+                backgroundMusicSource.loop = true;
+                backgroundMusicSource.start();
+                updateBackgroundMusicVolume();
+            }
+        }
+
+        function playSingingBowl() {
+            if (audioContext && singingBowlBuffer && settings.singingBowl) {
+                singingBowlSource = audioContext.createBufferSource();
+                singingBowlSource.buffer = singingBowlBuffer;
+                singingBowlSource.connect(singingBowlGainNode);
+                singingBowlGainNode.connect(audioContext.destination);
+                singingBowlSource.start();
+                updateSingingBowlVolume();
+            }
+        }
+
+        function updateBackgroundMusicVolume() {
+            const volume = settings.backgroundMusicVolume / 10;
+            backgroundMusicGainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+            backgroundMusicVolumeValue.textContent = settings.backgroundMusicVolume;
+        }
+
+        function updateSingingBowlVolume() {
+            const volume = settings.singingBowlVolume / 10;
+            singingBowlGainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+            singingBowlVolumeValue.textContent = settings.singingBowlVolume;
+        }
+
+        function updateRemainingTimeDisplay() {
+            const now = Date.now();
+            if (isBreathing && !isPaused && sessionEndTime > now) {
+                const remainingMs = sessionEndTime - now;
+                const minutes = Math.floor(remainingMs / 60000);
+                const seconds = Math.floor((remainingMs % 60000) / 1000);
+                remainingTimeDisplay.textContent = `남은 시간: ${minutes}분 ${seconds}초`;
+            } else if (!isBreathing) {
+                remainingTimeDisplay.textContent = `전체 시간: ${settings.totalTime}분`;
+            }
+        }
+
+        function breathe() {
+            if (!isBreathing || isPaused) return;
+
+            switch(currentPhase) {
+                case 'inhale':
+                    playSingingBowl();
+                    breathCircle.textContent = 'inhale';
+                    breathCircle.style.transform = 'scale(1.5)';
+                    remainingTime = settings.inhaleTime * 1000;
+                    break;
+                case 'inhaleHold':
+                    breathCircle.textContent = 'hold';
+                    remainingTime = settings.inhaleHoldTime * 1000;
+                    break;
+                case 'exhale':
+                    playSingingBowl();
+                    breathCircle.textContent = 'exhale';
+                    breathCircle.style.transform = 'scale(1)';
+                    remainingTime = settings.exhaleTime * 1000;
+                    break;
+                case 'exhaleHold':
+                    breathCircle.textContent = 'hold';
+                    remainingTime = settings.exhaleHoldTime * 1000;
+                    break;
+            }
+
+            breathingTimer = setTimeout(() => {
+                switch(currentPhase) {
+                    case 'inhale': currentPhase = 'inhaleHold'; break;
+                    case 'inhaleHold': currentPhase = 'exhale'; break;
+                    case 'exhale': currentPhase = 'exhaleHold'; break;
+                    case 'exhaleHold': currentPhase = 'inhale'; break;
+                }
+                breathe();
+            }, remainingTime);
+        }
+
+        function startBreathing() {
+            console.log('Starting breathing session');
+            isBreathing = true;
+            isPaused = false;
+            startBtn.textContent = '중지';
+            pauseBtn.style.display = 'inline-block';
+            playBackgroundMusic();
+            sessionEndTime = Date.now() + settings.totalTime * 60 * 1000;
+            breathe();
+            updateRemainingTimeDisplay();
+            
+            updateTimeTimer = setInterval(updateRemainingTimeDisplay, 1000);
+            
+            setTimeout(() => {
+                if (isBreathing) {
+                    stopBreathing();
+                }
+            }, settings.totalTime * 60 * 1000);
+        }
+
+        function stopBreathing() {
+            console.log('Stopping breathing session');
+            isBreathing = false;
+            isPaused = false;
+            startBtn.textContent = '시작';
+            pauseBtn.style.display = 'none';
+            breathCircle.textContent = 'ready';
+            breathCircle.style.transform = 'scale(1)';
+            if (backgroundMusicSource) {
+                backgroundMusicSource.stop();
+            }
+            clearTimeout(breathingTimer);
+            clearInterval(updateTimeTimer);
+            updateRemainingTimeDisplay();
+        }
+
+        function pauseBreathing() {
+            console.log('Pausing breathing session');
+            isPaused = true;
+            pauseBtn.textContent = '계속하기';
+            clearTimeout(breathingTimer);
+            if (backgroundMusicSource) {
+                backgroundMusicSource.stop();
+            }
+        }
+
+        function resumeBreathing() {
+            console.log('Resuming breathing session');
+            isPaused = false;
+            pauseBtn.textContent = '잠시 멈춤';
+            playBackgroundMusic();
+            breathe();
+        }
+
+        startBtn.addEventListener('click', () => {
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+            if (!audioContext || !backgroundMusicBuffer || !singingBowlBuffer) {
+                initAudio().then(() => {
+                    if (isBreathing) {
+                        stopBreathing();
+                    } else {
+                        startBreathing();
+                    }
+                });
+            } else {
+                if (isBreathing) {
+                    stopBreathing();
+                } else {
+                    startBreathing();
+                }
+            }
+        });
+
+        pauseBtn.addEventListener('click', () => {
+            if (isPaused) {
+                resumeBreathing();
+            } else {
+                pauseBreathing();
+            }
+        });
+
+        backgroundMusicVolumeSlider.addEventListener('input', () => {
+            settings.backgroundMusicVolume = parseInt(backgroundMusicVolumeSlider.value);
+            updateBackgroundMusicVolume();
+        });
+
+        singingBowlVolumeSlider.addEventListener('input', () => {
+            settings.singingBowlVolume = parseInt(singingBowlVolumeSlider.value);
+            updateSingingBowlVolume();
+        });
+
+        window.addEventListener('load', () => {
+            updateRemainingTimeDisplay();
+        });
+    </script>
+</body>
+</html>
